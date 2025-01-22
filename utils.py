@@ -1,57 +1,87 @@
-from langchain_ollama import OllamaLLM 
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.vectorstores import FAISS
 
-## Load Ollama LAMA2 LLM model
-llm = OllamaLLM(model="llama3.2")
+from langchain_ollama import OllamaLLM 
 
 ## Design ChatPrompt Template
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 
-def gpt(chat:str,db:object):
 
+
+def gpt(input:str,db:object,llm=object):
+
+    # Construct the prompt
     prompt = ChatPromptTemplate.from_template(
-
-    """
-    Answer the following question based only on the provided context. 
-    Think step by step before providing a detailed answer. 
-    I will tip you $1000 if the user finds the answer helpful. 
-    <context>
-    {context}
-    </context>
-    Question: {{chat}} 
-    """
+        """
+        Answer the following question based only on the provided context. 
+        Think step by step before providing a detailed answer. 
+        I will tip you $1000 if the user finds the answer helpful. 
+        <context>
+        {context}
+        </context>
+        Question: {input} 
+        """
     )
 
-    print(prompt)
+    #Flow
+    #any input inquiry will go to retriver. Retriver will retrive context from vector store
+    #retrived chain go to llm with context and prompt.
 
     ## Create Stuff Docment Chain
     document_chain = create_stuff_documents_chain(llm, prompt)
-
-    """
-    Retrievers: A retriever is an interface that returns documents given
-    an unstructured query. It is more general than a vector store.
-    A retriever does not need to be able to store documents, only to 
-    return (or retrieve) them. Vector stores can be used as the backbone
-    of a retriever, but there are other types of retrievers as well. 
-    https://python.langchain.com/docs/modules/data_connection/retrievers/   
-
-    """
- 
-    retriever = db.as_retriever()
-
-
-    """
-    Retrieval chain:This chain takes in a user inquiry, which is then
-    passed to the retriever to fetch relevant documents. Those documents 
-    (and original inputs) are then passed to an LLM to generate a response
-    https://python.langchain.com/docs/modules/chains/
-
-    """
-
-    retrieval_chain=create_retrieval_chain(retriever,document_chain)
-
-
-    response=retrieval_chain.invoke({"input":"What is this circular about"})
+    retriever = db.as_retriever()  #Interface for vector store
+    retrieval_chain = create_retrieval_chain(retriever,document_chain)
+    response = retrieval_chain.invoke({"input":input})
 
     return response['answer']
+
+
+def get_chain(db:object,llm=object):
+
+    # Construct the prompt
+    prompt = ChatPromptTemplate.from_template(
+        """
+        Answer the following question based only on the provided context. 
+        Think step by step before providing a detailed answer. 
+        I will tip you $1000 if the user finds the answer helpful. 
+        <context>
+        {context}
+        </context>
+        Question: {input} 
+        """
+    )
+
+    #Flow
+    #any input inquiry will go to retriver. Retriver will retrive context from vector store
+    #retrived chain go to llm with context and prompt.
+
+    ## Create Stuff Docment Chain
+    document_chain = create_stuff_documents_chain(llm, prompt)
+    retriever = db.as_retriever()  #Interface for vector store
+    retrieval_chain = create_retrieval_chain(retriever,document_chain)
+
+    return retrieval_chain
+
+
+def chat(prompt:str,chain:object):
+
+    response = chain.invoke({"input":prompt})
+
+    return response['answer']
+
+
+def get_vectors(base_url,model,docs):
+
+    
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
+    text_splitter.split_documents(docs)[:5]
+    documents=text_splitter.split_documents(docs)
+
+    embeddings = OllamaEmbeddings(model=model,base_url=base_url)
+    db = FAISS.from_documents(documents[:10],embeddings)
+
+    return db
