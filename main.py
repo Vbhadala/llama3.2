@@ -12,19 +12,32 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import FAISS
 
-from utils import llm, gpt
+from langchain_ollama import OllamaLLM 
+
+from utils import gpt,get_chain,get_vectors,chat
 
 import os
 import tempfile
 
 
+
+base_url :str = "http://localhost:11434"
+model :str = 'llama3.2'
+
+db = None
+chain = None
+
 app = FastAPI()
 
+## Load Ollama LAMA2 LLM model
+llm = OllamaLLM(model=model)
 
 
-async def get_generated_text(prompt: str, model: str):
+async def get_generated_text(prompt: str):
 
-    url = "http://localhost:11434/api/generate"
+
+    #this is defualt ollama endpoint
+    url = f"{base_url}/api/generate"
     async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.post(url, json={"model": model, "prompt": prompt})
@@ -43,42 +56,31 @@ async def get_generated_text(prompt: str, model: str):
 
             return {"response": combined_response}
 
-        except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Error communicating with the server: {str(e)}")
+        except Exception as e:
+            print(str(e))
+            raise RuntimeError(f"Error connecting with model: {str(e)}")
         
 
-@app.post("/pdf_url/")
-async def prompt_pdf(file_url:str,prompt:str = 'What is summary of this text'):
+@app.get('/')
+async def root():
 
+    return({'message':'Hello'})
 
-    # Save the file temporarily
+@app.get("/query")
+async def get_vector(query:str):
+
     try:
+        result = db.similarity_search(query)
+        response = result[0].page_content
 
-        # Load the PDF using PyPDFLoader
-        loader = PyPDFLoader(file_url)
-        docs = loader.load()
+        return ({'response':response})
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error in provided file url: {str(e)}")
+        print(str(e))
+        raise RuntimeError(f"Error connecting with vector store: {str(e)}")
 
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
-    text_splitter.split_documents(docs)[:5]
-    documents=text_splitter.split_documents(docs)
-
-    embeddings = OllamaEmbeddings(model='llama3.2',base_url='http://localhost:11434')
-    db = FAISS.from_documents(documents[:10],embeddings)
-
-    print(db)
-
-    response = gpt(prompt,db)
-
-    return ({'response':response})
-
-
-
-
-@app.post("/upload-pdf/")
+@app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
 
     # Check if the uploaded file is a PDF
@@ -100,74 +102,57 @@ async def upload_pdf(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
-    text_splitter.split_documents(docs)[:5]
-    documents=text_splitter.split_documents(docs)
-
-    embeddings = OllamaEmbeddings(model='llama3.2',base_url='http://localhost:11434')
-    db = FAISS.from_documents(documents[:10],embeddings)
-
-    # query="An attention function can be described as mapping a query "
-    # result = db.similarity_search(query)
-    # response = result[0].page_content
-
-    response = gpt('What is this document summary',db)
-
-    return ({'response':response})
+    global db 
+    db = get_vectors(base_url,model,docs)
+   
+    return ({'response':'success'})
 
 
+@app.post("/pdf_url")
+async def prompt_pdf(file_url:str,prompt:str = 'What is summary of this text'):
 
-
-
-
-@app.post("/upload-pdf/prompt")
-async def upload_pdf_prompt(file: UploadFile = File(...),prompt = 'What is this document summary'):
-
-    # Check if the uploaded file is a PDF
-    if file.content_type != "application/pdf":
-        return JSONResponse(content={"error": "File must be a PDF"}, status_code=400)
 
     # Save the file temporarily
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            temp_file.write(await file.read())
-            temp_file_path = temp_file.name
 
         # Load the PDF using PyPDFLoader
-        loader = PyPDFLoader(temp_file_path)
+        loader = PyPDFLoader(file_url)
         docs = loader.load()
 
-    finally:
-        # Ensure the temporary file is deleted after use
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
+    except Exception as e:
+            print(str(e))
+            raise RuntimeError(f"Error connecting with model: {str(e)}")
 
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
-    text_splitter.split_documents(docs)[:5]
-    documents=text_splitter.split_documents(docs)
+    global db,chain 
+    db = get_vectors(base_url,model,docs)
+    chain = get_chain(db,llm)
 
-    embeddings = OllamaEmbeddings(model='llama3.2',base_url='http://localhost:11434')
-    db = FAISS.from_documents(documents[:10],embeddings)
+    return ({'response':'success'})
 
-    # query="An attention function can be described as mapping a query "
-    # result = db.similarity_search(query)
-    # response = result[0].page_content
 
-    response = gpt(prompt,db)
+
+
+@app.post("/prompt-pdf")
+async def prompt_pdf(prompt = 'What is this document summary'):
+    
+    response = chat(prompt,chain)
 
     return ({'response':response})
 
 
 
-
-
-@app.post("/api/prompt")
+@app.post("/prompt-model")
 async def generate_tex_prompt(prompt:str):
+        
+    try:
 
-        response = await get_generated_text(prompt, 'llama3.2')
+        response = await get_generated_text(prompt)
         return JSONResponse(response)
+
+    except Exception as e:
+            print(str(e))
+            raise RuntimeError(f"Error connecting with model: {str(e)}")
 
 
 
@@ -175,14 +160,12 @@ async def generate_tex_prompt(prompt:str):
 async def download_model(llm_name: str = Body(..., embed=True)):
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "http://localhost:11434/api/pull",
-                json={"name": llm_name}
-            )
+            response = await client.post(f'{base_url}/api/pull',json={"name": llm_name})
             response.raise_for_status()
             return {"message": f"Model {llm_name} downloaded successfully"}
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=500, detail=f"Error downloading model: {str(e)}")
+    except Exception as e:
+            print(str(e))
+            raise RuntimeError(f"Error connecting with model: {str(e)}")
     
 
 
@@ -190,13 +173,13 @@ async def download_model(llm_name: str = Body(..., embed=True)):
 async def list_models():
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get("http://localhost:11434/api/tags")
+            response = await client.get(f'{base_url}/api/tags')
             response.raise_for_status()
             return {"models": response.json()["models"]}
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching models: {str(e)}")
+    except Exception as e:
+            print(str(e))
+            raise RuntimeError(f"Error connecting with model: {str(e)}")
     
-
 
 if __name__ == "__main__":
     import uvicorn
