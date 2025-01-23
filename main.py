@@ -102,10 +102,32 @@ async def upload_pdf(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-    global db 
+    global db,chain 
     db = get_vectors(base_url,model,docs)
+    chain = get_chain(db,llm)
+
+
    
-    return ({'response':'success'})
+    prompt = ''' The unstructured text includes 5 fields that are required to be extracted. These fields are:
+            Amount and currency of second charge mortgage to be granted,
+            Duration of the second charge mortgage,
+            The total amount to be repaid,
+            Broker Fee,
+            Added to Loan,
+            Lender Fee,
+            Lender Name,
+            Interest Rate,
+            This document produced for,
+            UK Mortgage Lending Ltd will pay us a commission,
+            Initial monthly instalment
+
+            Please extract the values into the fields with the same name.
+
+    '''
+
+    response = chat(prompt,chain)
+
+    return ({'response':response})
 
 
 @app.post("/pdf_url")
@@ -131,16 +153,6 @@ async def prompt_pdf(file_url:str,prompt:str = 'What is summary of this text'):
     return ({'response':'success'})
 
 
-
-
-@app.post("/prompt-pdf")
-async def prompt_pdf(prompt = 'What is this document summary'):
-    
-    response = chat(prompt,chain)
-
-    return ({'response':response})
-
-
 @app.post("/get-pdf-data")
 async def prompt_pdf():
 
@@ -164,6 +176,16 @@ async def prompt_pdf():
     response = chat(prompt,chain)
 
     return ({'response':response})
+
+
+
+@app.post("/prompt-pdf")
+async def prompt_pdf(prompt = 'What is this document summary'):
+    
+    response = chat(prompt,chain)
+
+    return ({'response':response})
+
 
 
 @app.post("/prompt-model")
