@@ -11,6 +11,42 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 
 
+async def process_pdf(task_id: str, docs: str,base_url:str,model:str,llm:object,fake_db:dict):
+    """
+    Process the PDF in the background and update the fake_db.
+    """
+    try:
+        # Generate db and chain
+        db = get_vectors(base_url, model, docs)
+        chain = get_chain(db, llm)
+
+        prompt = ''' The unstructured text includes 5 fields that are required to be extracted. These fields are:
+        Amount and currency of second charge mortgage to be granted,
+        Duration of the second charge mortgage,
+        The total amount to be repaid,
+        Broker Fee,
+        Added to Loan,
+        Lender Fee,
+        Lender Name,
+        Interest Rate,
+        This document produced for,
+        UK Mortgage Lending Ltd will pay us a commission,
+        Initial monthly instalment
+
+        Please extract the values into the fields with the same name.
+
+        '''
+
+        response = chat(prompt,chain)
+
+        # Update the fake_db with the results
+        fake_db[task_id] = {"status": "completed", "db": db, "chain": chain,'response':response}
+
+
+    except Exception as e:
+        # Update the fake_db with an error status
+        fake_db[task_id] = {"status": "error", "error": str(e)}
+
 
 def gpt(input:str,db:object,llm=object):
 
