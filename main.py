@@ -1,10 +1,11 @@
 import json
-from fastapi import FastAPI, HTTPException, Body,File, UploadFile
+from fastapi import FastAPI, HTTPException, Body,File, UploadFile,BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Optional
 import httpx
 import uvicorn
+import uuid
 
 
 from langchain_community.document_loaders import PyPDFLoader
@@ -14,7 +15,7 @@ from langchain_community.vectorstores import FAISS
 
 from langchain_ollama import OllamaLLM 
 
-from utils import gpt,get_chain,get_vectors,chat
+from utils import gpt,get_chain,get_vectors,chat, process_pdf
 
 import os
 import tempfile
@@ -24,8 +25,11 @@ import tempfile
 base_url :str = "http://localhost:11434"
 model :str = 'llama3.2'
 
-db = None
-chain = None
+db :object= None
+chain :object = None
+
+# Fake in-memory database
+fake_db: Dict[str, Dict] = {}
 
 app = FastAPI()
 
@@ -81,7 +85,7 @@ async def get_vector(query:str):
 
 
 @app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(background_tasks: BackgroundTasks,file: UploadFile = File(...)):
 
     # Check if the uploaded file is a PDF
     if file.content_type != "application/pdf":
@@ -102,39 +106,25 @@ async def upload_pdf(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-    global db,chain 
-    db = get_vectors(base_url,model,docs)
-    chain = get_chain(db,llm)
+    # Generate a unique ID for the task
+    task_id = str(uuid.uuid4())
+
+    # Add a placeholder for the task in the database
+    fake_db[task_id] = {"status": "processing", "db": None, "chain": None,'response':None}
+
+    # Add the background task
+    background_tasks.add_task(process_pdf, task_id,docs,base_url,model,llm,fake_db)
+
+    return {"task_id": task_id, "message": "Processing started. Use the task_id to query the status."}
 
 
-   
-    prompt = ''' The unstructured text includes 5 fields that are required to be extracted. These fields are:
-            Amount and currency of second charge mortgage to be granted,
-            Duration of the second charge mortgage,
-            The total amount to be repaid,
-            Broker Fee,
-            Added to Loan,
-            Lender Fee,
-            Lender Name,
-            Interest Rate,
-            This document produced for,
-            UK Mortgage Lending Ltd will pay us a commission,
-            Initial monthly instalment
 
-            Please extract the values into the fields with the same name.
+@app.post("/pdf-url")
+async def prompt_pdf(file_url: str, background_tasks: BackgroundTasks):
+    """
+    Endpoint to process a PDF file asynchronously.
+    """
 
-    '''
-
-    response = chat(prompt,chain)
-
-    return ({'response':response})
-
-
-@app.post("/pdf_url")
-async def prompt_pdf(file_url:str,prompt:str = 'What is summary of this text'):
-
-
-    # Save the file temporarily
     try:
 
         # Load the PDF using PyPDFLoader
@@ -143,43 +133,37 @@ async def prompt_pdf(file_url:str,prompt:str = 'What is summary of this text'):
 
     except Exception as e:
             print(str(e))
-            raise RuntimeError(f"Error connecting with model: {str(e)}")
+            raise RuntimeError(f"Error reading PDF: {str(e)}")
 
+    # Generate a unique ID for the task
+    task_id = str(uuid.uuid4())
 
-    global db,chain 
-    db = get_vectors(base_url,model,docs)
-    chain = get_chain(db,llm)
+    # Add a placeholder for the task in the database
+    fake_db[task_id] = {"status": "processing", "db": None, "chain": None,'response':None}
 
-    return ({'response':'success'})
+    # Add the background task
+    background_tasks.add_task(process_pdf, task_id,docs,base_url,model,llm,fake_db)
 
-
-@app.post("/get-pdf-data")
-async def prompt_pdf():
-
-    prompt = ''' The unstructured text includes 5 fields that are required to be extracted. These fields are:
-            Amount and currency of second charge mortgage to be granted,
-            Duration of the second charge mortgage,
-            The total amount to be repaid,
-            Broker Fee,
-            Added to Loan,
-            Lender Fee,
-            Lender Name,
-            Interest Rate,
-            This document produced for,
-            UK Mortgage Lending Ltd will pay us a commission,
-            Initial monthly instalment
-
-            Please extract the values into the fields with the same name.
-
-    '''
-
-    response = chat(prompt,chain)
-
-    return ({'response':response})
+    return {"task_id": task_id, "message": "Processing started. Use the task_id to query the status."}
 
 
 
-@app.post("/prompt-pdf")
+@app.get("/task-status/{task_id}")
+async def get_status(task_id: str):
+
+    if task_id not in fake_db:
+        return {"error": "Invalid task_id."}
+
+    task_data = fake_db[task_id]
+
+    if task_data["status"] != "completed":
+        return {"status": task_data["status"], "message": "Task is not completed yet."}
+    
+    return {"status": "completed","response": task_data["response"] }
+
+
+
+@app.post("/prompt-pdf/{task_id}")
 async def prompt_pdf(prompt = 'What is this document summary'):
     
     response = chat(prompt,chain)
@@ -227,6 +211,8 @@ async def list_models():
             raise RuntimeError(f"Error connecting with model: {str(e)}")
     
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
+
